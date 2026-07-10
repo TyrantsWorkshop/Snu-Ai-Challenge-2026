@@ -24,7 +24,7 @@ configs = [
             "--head_lr", "5e-5",
             "--weight_decay", "0.1",
             "--epochs", "8",
-            "--batch_size", "16",
+            "--batch_size", "8",
             "--num_workers", "2",
             "--output_dir", "./checkpoints/run_2_regularized"
         ]
@@ -52,7 +52,7 @@ configs = [
             "--head_lr", "8e-5",
             "--weight_decay", "0.05",
             "--epochs", "8",
-            "--batch_size", "16",
+            "--batch_size", "8",
             "--num_workers", "2",
             "--output_dir", "./checkpoints/run_4_deberta"
         ]
@@ -79,7 +79,7 @@ def run_experiment(config):
     ckpt_path = os.path.join(args[args.index("--output_dir") + 1], "best_model.pt")
     if os.path.exists(ckpt_path):
         try:
-            checkpoint = torch.load(ckpt_path, map_location="cpu")
+            checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
             val_acc = checkpoint.get("val_exact_acc", "Unknown")
             print(f"\n>>> Experiment {name} completed! Best Val Exact Match: {val_acc:.4f}\n")
             return val_acc
