@@ -1,0 +1,25 @@
+# Python temporary files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments
+venv/
+ENV/
+env/
+.env
+
+# Large data and checkpoints
+data/
+checkpoints/
+*.pt
+*.pth
+
+# IDE configurations
+.idea/
+.vscode/
+
+# Local prediction outputs
+*.csv
+!sample_submission.csv
