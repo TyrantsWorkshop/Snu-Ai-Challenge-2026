@@ -1,5 +1,6 @@
 import subprocess
 import os
+import sys
 import torch
 import pandas as pd
 
@@ -61,7 +62,7 @@ configs = [
 def run_experiment(config):
     name = config["name"]
     args = config["args"]
-    cmd = ["python", "train.py"] + args
+    cmd = [sys.executable, "train.py"] + args
     
     print("=" * 60)
     print(f"STARTING EXPERIMENT: {name}")
