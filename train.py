@@ -147,7 +147,17 @@ def train(args):
     total_steps = args.epochs * len(train_loader)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda" and args.amp))
+    # Determine AMP precision and dtype
+    amp_dtype = torch.float16
+    use_bf16 = False
+    if device.type == "cuda" and args.amp:
+        if "deberta" in args.text_backbone.lower() or (hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()):
+            amp_dtype = torch.bfloat16
+            use_bf16 = True
+            print("Using bfloat16 for Automatic Mixed Precision (AMP) training.")
+
+    use_scaler = (device.type == "cuda" and args.amp and not use_bf16)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_scaler)
     criterion = nn.CrossEntropyLoss()
 
     best_val_acc = -1.0
@@ -165,7 +175,7 @@ def train(args):
             labels = batch["labels"].to(device, non_blocking=True)  # [B,4]
 
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=(device.type == "cuda" and args.amp)):
+            with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=args.amp):
                 logits = model(imgs, input_ids, attn)  # [B,4,4]
                 # cross entropy per row (per input frame), summed over the 4 rows
                 loss = 0.0
@@ -173,11 +183,16 @@ def train(args):
                     loss = loss + criterion(logits[:, i, :], labels[:, i])
                 loss = loss / 4.0
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
+            if use_scaler:
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
             scheduler.step()
 
             running_loss += loss.item()
