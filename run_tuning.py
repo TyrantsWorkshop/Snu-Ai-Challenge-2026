@@ -54,6 +54,7 @@ configs = [
             "--epochs", "8",
             "--batch_size", "8",
             "--num_workers", "2",
+            "--amp", "False",
             "--output_dir", "./checkpoints/run_4_deberta"
         ]
     }

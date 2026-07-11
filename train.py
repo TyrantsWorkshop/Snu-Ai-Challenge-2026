@@ -238,7 +238,7 @@ def get_args():
     p.add_argument("--val_ratio", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--num_workers", type=int, default=4)
-    p.add_argument("--amp", action="store_true", default=True)
+    p.add_argument("--amp", type=lambda x: str(x).lower() in ['true', '1', 'yes'], default=True)
 
     return p.parse_args()
 
