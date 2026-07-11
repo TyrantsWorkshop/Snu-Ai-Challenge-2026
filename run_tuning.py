@@ -63,7 +63,20 @@ def run_experiment(config):
     name = config["name"]
     args = config["args"]
     cmd = [sys.executable, "train.py"] + args
-    
+
+    # Check if checkpoint already exists to skip training
+    ckpt_path = os.path.join(args[args.index("--output_dir") + 1], "best_model.pt")
+    if os.path.exists(ckpt_path):
+        try:
+            import torch
+            checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            val_acc = checkpoint.get("val_exact_acc", None)
+            if val_acc is not None and isinstance(val_acc, float):
+                print(f"\n>>> Found existing checkpoint for {name}. Skipping training. Best Val Exact Match: {val_acc:.4f}\n")
+                return val_acc
+        except Exception:
+            pass
+
     print("=" * 60)
     print(f"STARTING EXPERIMENT: {name}")
     print(f"Command: {' '.join(cmd)}")
