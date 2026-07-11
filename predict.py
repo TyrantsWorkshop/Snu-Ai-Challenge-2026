@@ -17,7 +17,7 @@ def run_inference(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     ckpt_args = ckpt["args"]
 
     tokenizer = AutoTokenizer.from_pretrained(ckpt_args["text_backbone"])
