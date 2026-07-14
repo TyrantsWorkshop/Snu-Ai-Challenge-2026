@@ -4,31 +4,46 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import AutoTokenizer
 from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
 from dataset import FrameOrderDataset
-from model import FrameOrderModel
+from model import FrameOrderModel, resolve_model_path
 
 
-def build_train_transform(image_size=224):
+def build_train_transform(image_size=224, is_clip=False):
+    # Use CLIP normalization stats if is_clip is True
+    if is_clip:
+        mean = [0.48145466, 0.4578275, 0.40821073]
+        std = [0.26862954, 0.26130258, 0.27577711]
+    else:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+
     return transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=mean, std=std),
     ])
 
 
-def build_val_transform(image_size=224):
+def build_val_transform(image_size=224, is_clip=False):
+    if is_clip:
+        mean = [0.48145466, 0.4578275, 0.40821073]
+        std = [0.26862954, 0.26130258, 0.27577711]
+    else:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+
     return transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=mean, std=std),
     ])
 
 
@@ -46,7 +61,6 @@ def hungarian_predictions(logits):
     for b in range(logits.shape[0]):
         cost = -logits[b]  # linear_sum_assignment minimizes cost
         row_ind, col_ind = linear_sum_assignment(cost)
-        # row_ind is already [0,1,2,3] sorted; col_ind gives assigned slot per row
         preds[b, row_ind] = col_ind
     return preds
 
@@ -82,7 +96,21 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.text_backbone)
+    is_clip = "clip" in args.vision_backbone.lower() or "clip" in args.text_backbone.lower()
+
+    # Load proper tokenizer
+    resolved_text_backbone = resolve_model_path(args.text_backbone)
+    if "clip" in args.text_backbone.lower():
+        from transformers import CLIPTokenizer
+        tokenizer = CLIPTokenizer.from_pretrained(resolved_text_backbone, local_files_only=True)
+        # CLIP maximum input length is exactly 77
+        max_len = 77
+        print(f"Loaded CLIPTokenizer. Restricting max_len to 77.")
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(resolved_text_backbone, local_files_only=True)
+        max_len = args.max_len
+        print(f"Loaded AutoTokenizer. Using max_len={max_len}.")
+
     df = pd.read_csv(args.train_csv)
     n = len(df)
     rng = np.random.RandomState(args.seed)
@@ -94,15 +122,15 @@ def train(args):
     train_df = df.iloc[train_idx].reset_index(drop=True)
     val_df = df.iloc[val_idx].reset_index(drop=True)
 
-    train_transform = build_train_transform(args.image_size)
-    val_transform = build_val_transform(args.image_size)
+    train_transform = build_train_transform(args.image_size, is_clip=is_clip)
+    val_transform = build_val_transform(args.image_size, is_clip=is_clip)
 
     train_ds = FrameOrderDataset(
         csv_path_or_df=train_df,
         img_root=args.train_img_root,
         image_transform=train_transform,
         tokenizer=tokenizer,
-        max_len=args.max_len,
+        max_len=max_len,
         is_train=True,
     )
     val_ds = FrameOrderDataset(
@@ -110,7 +138,7 @@ def train(args):
         img_root=args.train_img_root,
         image_transform=val_transform,
         tokenizer=tokenizer,
-        max_len=args.max_len,
+        max_len=max_len,
         is_train=True,
     )
 
@@ -131,13 +159,14 @@ def train(args):
 
     # Differential learning rates: pretrained backbones get a smaller LR,
     # the from-scratch fusion module + head get a larger LR.
-    backbone_params = list(model.vision_encoder.parameters()) + list(model.text_encoder.parameters())
-    new_params = (
-        list(model.vis_proj.parameters()) + list(model.text_proj.parameters()) +
-        list(model.fusion.parameters()) + list(model.fusion_norm.parameters()) +
-        list(model.slot_head.parameters()) + list(model.input_id_embed.parameters()) +
-        [model.frame_type_embed, model.text_type_embed]
-    )
+    backbone_params = []
+    if hasattr(model, "vision_encoder"):
+        backbone_params += list(model.vision_encoder.parameters())
+    if hasattr(model, "text_encoder"):
+        backbone_params += list(model.text_encoder.parameters())
+
+    backbone_param_ids = set(id(p) for p in backbone_params)
+    new_params = [p for p in model.parameters() if id(p) not in backbone_param_ids]
 
     optimizer = torch.optim.AdamW([
         {"params": [p for p in backbone_params if p.requires_grad], "lr": args.backbone_lr},
@@ -229,7 +258,7 @@ def get_args():
     p.add_argument("--freeze_text", action="store_true")
 
     p.add_argument("--image_size", type=int, default=224)
-    p.add_argument("--max_len", type=int, default=48)
+    p.add_argument("--max_len", type=int, default=96)  # Increased default max_len based on dataset analysis
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--epochs", type=int, default=15)
     p.add_argument("--backbone_lr", type=float, default=1e-5)

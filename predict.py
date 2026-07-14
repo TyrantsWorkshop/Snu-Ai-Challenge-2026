@@ -9,7 +9,7 @@ from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
 from dataset import FrameOrderDataset
-from model import FrameOrderModel
+from model import FrameOrderModel, resolve_model_path
 from train import build_transform, hungarian_predictions  # reuse the same logic as training
 
 
@@ -20,15 +20,28 @@ def run_inference(args):
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     ckpt_args = ckpt["args"]
 
-    tokenizer = AutoTokenizer.from_pretrained(ckpt_args["text_backbone"])
-    transform = build_transform(ckpt_args["image_size"])
+    # Load proper tokenizer
+    is_clip = "clip" in ckpt_args["vision_backbone"].lower() or "clip" in ckpt_args["text_backbone"].lower()
+    resolved_text_backbone = resolve_model_path(ckpt_args["text_backbone"])
+    if "clip" in ckpt_args["text_backbone"].lower():
+        from transformers import CLIPTokenizer
+        tokenizer = CLIPTokenizer.from_pretrained(resolved_text_backbone, local_files_only=True)
+        max_len = 77
+        print(f"Loaded CLIPTokenizer for prediction. Restricting max_len to 77.")
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(resolved_text_backbone, local_files_only=True)
+        max_len = ckpt_args["max_len"]
+        print(f"Loaded AutoTokenizer for prediction. Using max_len={max_len}.")
+
+    # Load proper transforms
+    transform = build_transform(ckpt_args["image_size"], is_clip=is_clip)
 
     test_dataset = FrameOrderDataset(
-        csv_path=args.test_csv,
+        csv_path_or_df=args.test_csv,
         img_root=args.test_img_root,
         image_transform=transform,
         tokenizer=tokenizer,
-        max_len=ckpt_args["max_len"],
+        max_len=max_len,
         is_train=False,
     )
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
@@ -61,8 +74,6 @@ def run_inference(args):
             all_ids.extend(list(ids))
             all_preds.extend((preds + 1).tolist())  # back to 1-indexed to match Answer format
 
-    # NOTE: double check sample_submission.csv for the exact expected column
-    # names / string formatting and adjust below if it differs.
     out_df = pd.DataFrame({
         "Id": all_ids,
         "Answer": [str(p) for p in all_preds],
